@@ -1,0 +1,10 @@
+services:
+  triage-app:
+    build: ./app
+    ports:
+      - "8000:8000"
+    environment:
+      AI_SERVICE_URL: http://ai:8001
+  
+  ai:
+    build: ./ai-service
