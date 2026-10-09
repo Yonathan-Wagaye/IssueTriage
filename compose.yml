@@ -5,6 +5,14 @@ services:
       - "8000:8000"
     environment:
       AI_SERVICE_URL: http://ai:8001
-  
+      WATCHFILES_FORCE_POLLING: "true"
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+    volumes:
+      - ./app:/app
+
   ai:
     build: ./ai-service
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./ai-service:/ai-service
