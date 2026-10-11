@@ -1,206 +1,125 @@
 # IssueTriage
 
-IssueTriage watches a GitHub repository and triages each new issue. OpenAI reads the issue and returns two things: a semantic classification, and a summary that is clearer than the original report.
+IssueTriage watches one GitHub repository and triages its issues. When an issue is opened or edited, the application saves the issue and a durable triage job. A background worker asks a small AI service to classify the issue and write a clearer summary. The client reads the latest saved result; it does not wait for AI during the webhook request.
 
-GitHub delivers the issue. The application exposes one HTTP endpoint and waits for GitHub to call it.
+This is a learning project for webhooks, ASGI workers, async I/O, database transactions, and failure recovery. Version 1 deliberately uses one repository, one triage application process, SQLite, and five concurrent async worker tasks. It does not require Redis, SQS, or a separate worker HTTP API.
 
 ## Architecture
 
-![Updated flow](docs/architecture.jpg)
-
-The sketch above is the system. Color marks the role of each part.
-
-| Color | Part | Role |
-| --- | --- | --- |
-| Yellow | External systems | GitHub, the source of issues, and OpenAI, which classifies and summarizes them. |
-| Red | Triage application | Two services: the application service and the AI service. |
-| Blue | API | HTTP interface the worker uses to run a scheduled triage task. |
-| Green | Background worker | Runs triage after the webhook request has been accepted. |
-| Purple | Storage | Persists the issue, its classification, and its summary. |
-
-The workstation in the sketch is the client. It asks the application service for triaged issues.
-
-The numbers on the arrows match the steps in [Flow](#flow). A two-way arrow is a request and its response.
-
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 70, "rankSpacing": 90, "padding": 20}, "themeVariables": {"fontSize": "16px"}}}%%
-flowchart TB
-  GitHub["<b>GitHub</b><br/>repository with an<br/>Issues webhook"]
-  Client["<b>Client</b><br/>views triaged issues"]
-
-  Storage[("<b>Storage</b><br/>issues, classifications,<br/>summaries")]
-
-  subgraph triage ["Triage application"]
-    AppSvc["<b>Application service</b><br/>accepts webhooks<br/>accepts client requests<br/>schedules triage tasks"]
-    AISvc["<b>AI service</b><br/>classifies the issue<br/>rewrites the summary"]
-  end
-
-  subgraph worker ["Background worker"]
-    API["<b>API</b><br/>runs a scheduled<br/>triage task"]
-  end
-
-  OpenAI["<b>OpenAI</b><br/>semantic classification<br/>and summary"]
-
-  GitHub -->|"(1) POST /webhooks/github"| AppSvc
-  Client -->|"(8) request issue"| AppSvc
-  AISvc <-->|"(4) run triage"| API
-  AISvc <-->|"(5) title and body<br/>(6) classification and summary"| OpenAI
-  AppSvc -->|"(3) schedule task"| API
-  AppSvc <-->|"(2) store issue<br/>(9) load result"| Storage
-  API -->|"(7) save result"| Storage
-
-  classDef external fill:#FFF4C2,stroke:#C99A00,stroke-width:2px,color:#111
-  classDef service fill:#FFFFFF,stroke:#D9534F,stroke-width:2px,color:#111
-  classDef api fill:#E3F0FF,stroke:#2F6FD6,stroke-width:2px,color:#111
-  classDef storage fill:#F1E8FF,stroke:#7C4DDB,stroke-width:2px,color:#111
-  classDef client fill:#EEF1F5,stroke:#2F6FD6,stroke-width:2px,color:#111
-
-  class GitHub,OpenAI external
-  class AppSvc,AISvc service
-  class API api
-  class Storage storage
-  class Client client
-
-  style triage fill:#FDECEC,stroke:#D9534F,stroke-width:3px,color:#111
-  style worker fill:#E8F7EC,stroke:#2E9E4F,stroke-width:3px,color:#111
+flowchart LR
+    GH[GitHub Issues webhook] -->|opened or edited| RX[Webhook receiver]
+    RX -->|one transaction| DB[(SQLite: deliveries, issues, jobs, results)]
+    RX -.->|wake-up hint| Q[asyncio.Queue]
+    SC[Recovery scanner] -->|find pending or expired jobs| DB
+    SC -.->|wake-up hint| Q
+    Q --> W[Five async worker tasks]
+    W -->|atomic claim and final save| DB
+    W -->|HTTP request| AI[AI service]
+    AI -->|API request| OA[OpenAI]
+    C[Client] -->|request latest issue/result| RX
+    RX -->|read| DB
 ```
 
-### Triage application
 
-The red boundary is one application with two services.
 
-**Application service.** This service owns the edge of the system:
+The webhook receiver, queue, scanner, and five worker tasks run in **one triage application process** initially. The AI service is a separate HTTP service; it calls OpenAI and returns a result to the worker. Five async tasks are not five Uvicorn processes. Run the triage application with one Uvicorn process for version 1; adding Uvicorn processes creates separate in-memory queues in each process and needs deliberate coordination.
 
-- It accepts the GitHub webhook.
-- It accepts requests from the client.
-- It schedules a background task for each issue that still needs triage.
+SQLite is the source of truth. `asyncio.Queue` contains only job IDs and helps workers wake quickly. Its contents can disappear on restart without losing a job. The recovery scanner reads SQLite on startup and periodically thereafter. The client initially refreshes or polls for results; server-sent events can be added later.
 
-**AI service.** Background tasks call this service. It sends the issue title and body to OpenAI and returns a classification together with a rewritten summary. The webhook request ends once the task is scheduled. The OpenAI call runs in the worker.
+## Data and job states
 
-### Background worker and API
+The following tables describe the intended data model, not a required final schema:
 
-The green boundary is the background worker. The blue box inside it is the API that receives a scheduled task and calls the AI service.
 
-The application service answers GitHub as soon as the issue is stored and the task is scheduled. The worker then calls OpenAI, through the AI service, and writes the classification and summary to storage.
+| Table                | Purpose                                                                                                                                                   |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `webhook_deliveries` | A unique GitHub delivery ID prevents redelivery from creating the same work twice.                                                                        |
+| `issues`             | The latest accepted title, body, source update time, and local revision for each repository/issue pair.                                                   |
+| `triage_jobs`        | One job for an issue revision, including status, attempt count, next retry time, owner token, and lease expiry. The issue/revision pair should be unique. |
+| `triage_results`     | Classification and summary tied to the exact issue revision that was analyzed.                                                                            |
 
-### Storage
 
-The purple cylinder holds the issue as GitHub sent it, plus the triage result. The worker writes the result. The application service reads it when the client asks.
+A job normally moves through `pending → running → completed`. A temporary failure returns it to `pending` with a later `next_attempt_at`. Repeated or permanent failure moves it to `failed` for inspection. A job for an older issue revision may become `superseded`. The UI shows a result only when its revision matches the issue's current revision.
 
-### External systems
+## Flow: issue #42
 
-Both yellow boxes sit outside the triage application.
+1. Someone opens issue #42. GitHub sends an `issues.opened` webhook to `POST /webhooks/github`.
+2. The receiver verifies the signature, checks the event and action, and deduplicates by `X-GitHub-Delivery`. In **one SQLite transaction**, it records the delivery, saves issue #42 as revision 1, and inserts pending job `J1`. If any write fails, the whole transaction rolls back.
+3. After the commit, the receiver returns a successful HTTP response to GitHub. It may also put `J1` into `asyncio.Queue`, but that notification is optional for correctness. It does not call AI in the webhook request.
+4. A worker gets the ID and **atomically claims** `J1` in SQLite: `status=running`, an attempt count, a unique owner token, and a lease expiry. Another worker trying the same claim does not win. The transaction ends before any network call.
+5. The worker calls the AI service with the job ID, issue key, revision, title, and body. The AI service calls OpenAI and returns a classification and clearer summary. Issue text is treated as data, not as instructions to the AI service.
+6. In one final SQLite transaction, the worker saves the result and marks `J1` completed **only if** its owner token is still current, its lease has not expired, and issue #42 is still at revision 1. The client can then read the result through the application API.
 
-- The labeled box is GitHub. An issue event leaves that box and enters the application service.
-- The unlabeled box is OpenAI. The AI service sends the issue there and receives the classification and summary.
+For one successful issue, this example performs three short database transactions: intake (delivery + issue + job), claim, and completion (result + job status). Reads and in-memory queue notifications are separate. No database transaction remains open while waiting for the AI service.
 
-## Flow
+### Issue edits
 
-1. Someone opens an issue in the connected repository, and GitHub sends an HTTP `POST` to `/webhooks/github`.
-2. The application service verifies the webhook signature and stores the issue.
-3. The application service schedules a triage task and responds to GitHub.
-4. The background worker picks up the task through its API and calls the AI service.
-5. The AI service sends the issue title and body to OpenAI.
-6. OpenAI returns a semantic classification and a clearer summary.
-7. The worker saves both on the issue in storage.
-8. The client requests the issue from the application service.
-9. The application service loads the stored classification and summary and returns them to the client.
+If issue #42 is edited while `J1` is running, the receiver saves revision 2 and creates `J2` in one transaction. `J1` may finish, but it must not publish its revision-1 answer as the current result. `J2` produces the revision-2 answer. Check the revision **again at final save**, because an edit can arrive after the worker's initial check.
 
-The same flow in time order. GitHub gets its response at step 3, before any OpenAI call is made.
+GitHub deliveries should not be assumed to arrive in issue-update order. An older delivery must not replace newer issue content. Compare source update information and, when ordering is ambiguous, fetch the current issue from GitHub before deciding what to process. This is a separate concern from deduplicating the same delivery ID.
 
-```mermaid
-sequenceDiagram
-  participant GitHub
-  participant App as Application service
-  participant Storage
-  participant Worker as Background worker (API)
-  participant AI as AI service
-  participant OpenAI
-  actor Client
+## Failure and race behavior
 
-  GitHub->>App: (1) POST /webhooks/github
-  App->>Storage: (2) store issue
-  App->>Worker: (3) schedule triage task
-  App-->>GitHub: (3) 2xx response
 
-  Worker->>AI: (4) run triage
-  AI->>OpenAI: (5) title and body
-  OpenAI-->>AI: (6) classification and summary
-  AI-->>Worker: classification and summary
-  Worker->>Storage: (7) save result
+| Failure or race                                          | Recovery or protection                                                                                                                                                                                                 |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Crash before the intake transaction commits              | Neither the issue change nor its job is saved. The webhook delivery is unsuccessful and needs redelivery.                                                                                                              |
+| Crash after intake commits but before `queue.put()`      | The pending job remains in SQLite. The startup/periodic scan finds it.                                                                                                                                                 |
+| Intake commits but the HTTP acknowledgment is lost       | A redelivery carries the same delivery ID; the uniqueness check prevents a second job.                                                                                                                                 |
+| Two workers receive the same queued ID                   | The conditional database claim gives ownership to only one. Duplicate queue notifications are harmless.                                                                                                                |
+| Worker crashes while processing                          | The job remains `running`; after its lease expires it becomes eligible for another claim.                                                                                                                              |
+| Lease expires while the original worker is still running | Another worker may call AI too. Completion requires both a current owner token and an unexpired lease; the old worker's late save is rejected. This prevents a stale database result, **not** every duplicate AI call. |
+| AI call times out or fails temporarily                   | Record the attempt and retry later with backoff, up to a limit. A timeout does not prove the remote service stopped processing.                                                                                        |
+| AI succeeds but worker crashes before final commit       | No result is saved; the job is retried after lease expiry. The external AI call may happen twice.                                                                                                                      |
+| Crash during final commit                                | Result and completed status either both commit or neither commits.                                                                                                                                                     |
+| Issue is edited during an AI call                        | The completion transaction checks the issue revision; an old answer cannot become the current answer.                                                                                                                  |
 
-  Client->>App: (8) request issue
-  App->>Storage: load issue
-  Storage-->>App: (9) stored result
-  App-->>Client: (9) issue with classification and summary
-```
 
-An incoming payload looks like this:
+Use a deadline for the **whole processing attempt** that leaves time to save the result before the lease expires, or renew the lease while working. A plain HTTP read timeout is not necessarily a deadline for the whole operation. Leases help recovery but do not guarantee exactly-once external execution. Bounded retries and a visible `failed` state prevent endless retry loops.
 
-```json
-{
-  "action": "opened",
-  "issue": {
-    "title": "Login is not working",
-    "body": "..."
-  },
-  "repository": {
-    "id": 12345,
-    "full_name": "yonathan/example-project"
-  }
-}
-```
+There is an important limit at the GitHub boundary: **GitHub does not automatically redeliver failed webhook deliveries**. For this first version, inspect and manually redeliver missed deliveries after downtime; automated redelivery can be a later feature. [GitHub's failure guidance](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries) explains this behavior.
 
-The `repository` object tells the application which repository produced the event. The endpoint is shared; the payload names the source.
+## Why this design?
 
-## Webhook
+- **Save the issue and work intent together.** The issue and its pending job share one SQLite transaction. A crash cannot leave a committed issue update without a committed instruction to triage it.
+- **Use the queue for speed, not durability.** The scanner can recover work from SQLite after a restart or a lost notification. For this small, single-host project, a database-backed job table avoids introducing a second state store.
+- **Make ownership temporary and conditional.** A lease lets a job recover after a worker crash; an owner token prevents a worker whose lease was replaced from saving a late result.
+- **Expect retries and duplicates.** The database can ensure that one current result is published, but it cannot know with certainty whether an external AI call completed just before a crash. Duplicate calls may incur extra cost.
+- **Version results.** Opening and editing the same issue can produce overlapping AI calls. Tying each job and result to a revision prevents an earlier answer from overwriting the latest one.
+- **Keep webhook latency separate from AI latency.** GitHub receives its response after durable intake, not after classification. Workers handle the slower I/O concurrently.
 
-This project uses one repository webhook.
+Redis or a broker could become useful if job volume, multi-host deployment, or operational needs justify one. Redis is not automatically safer than SQLite for job status: marking a job complete in Redis and saving its result in SQLite would reintroduce a two-system write problem. If we later publish committed jobs to a separate durable broker, a classical **transactional outbox relay** becomes relevant. The current `triage_jobs` table already durably records work, so an additional outbox table is unnecessary for version 1.
 
-A repository webhook receives events only from that repository. The triage application still needs only one endpoint. Every repository that should be triaged can post to the same URL:
+## Concepts and sources that informed the design
 
-```text
-Repository A ─┐
-Repository B ─┼── POST /webhooks/github ──► Triage application
-Repository C ─┘
-```
+This is a combination of established reliability patterns, adapted to a small project rather than copied from one reference architecture:
 
-### Setup for this project
 
-Use one repository that you own.
+| Concept                                  | How it appears here                                                            | Read more                                                                                                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fast, authenticated webhook intake       | Verify the signature, use delivery IDs, and acknowledge after durable intake.  | [GitHub webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks), [signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) |
+| Atomic transaction                       | Commit the issue update and pending job together.                              | [SQLite transactions](https://www.sqlite.org/lang_transaction.html), [AWS transactional outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)                       |
+| Lease / visibility timeout               | An unfinished job can be reclaimed after its owner disappears.                 | [Amazon SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)                                                                                         |
+| At-least-once processing and idempotency | Duplicate deliveries or retries must not create an incorrect result.           | [AWS idempotency guidance](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_prevent_interaction_failure_idempotent.html)                                                                                        |
+| Optimistic concurrency                   | Save only if the expected issue revision and job ownership still match.        | [AWS optimistic locking explanation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_OptimisticLocking.html)                                                                                     |
+| Bounded retry with backoff               | Temporary AI/network failures retry later rather than immediately and forever. | [AWS retry-with-backoff pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/retry-backoff.html)                                                                                             |
 
-1. Open **Settings → Webhooks → Add webhook**.
-2. Set the payload URL to `https://your-public-address/webhooks/github`.
-3. Set the content type to `application/json`.
-4. Create a webhook secret. The application service checks the signature before it stores the issue or schedules work.
-5. Subscribe only to **Issues** events.
-6. Open an issue in that repository.
 
-GitHub then sends one `POST`. The public address has to be reachable from GitHub.
+These references explain principles; IssueTriage is not required to use AWS services. In particular, its SQLite job table is a **database-backed job queue**, while AWS's classical outbox example publishes to an external broker.
 
-### Later, more than one repository
+## Version 1 scope
 
-Three ways to cover more than the single repository. This project stays on the first row until the pipeline above works.
+- One repository webhook, one public callback URL, and the `issues` event with `opened` and `edited` actions.
+- One triage application process with five async worker tasks; one separate AI service.
+- SQLite for deliveries, issue revisions, jobs, and results; `asyncio.Queue` only as an optional wake-up hint.
+- Startup and periodic recovery scans, atomic claims, leases, bounded retries, and revision-safe final saves.
+- A simple client that refreshes or polls. SSE, Redis, SQS, multi-host workers, and GitHub App installation are later choices.
 
-| Option | Coverage | Complexity |
-| --- | --- | --- |
-| Repository webhook | One repository | Low |
-| Organization webhook | Every repository in one organization | Medium |
-| GitHub App | Selected repositories, or every repository where the app is installed | High |
+The first milestone is not “exactly once.” It is: **no committed job silently disappears, crashes lead to a clear retry path, and an old worker cannot publish an outdated answer.**
 
-Repository webhooks receive events only from their own repository. An organization webhook can receive events from all repositories owned by that organization. A GitHub App has one webhook and receives events from the repositories it can access. See [GitHub webhook types](https://docs.github.com/en/webhooks/types-of-webhooks).
+## Webhook setup
 
-GitHub has no single webhook that covers every repository on a personal account. For several personal repositories, add this same URL to each repository, or install a GitHub App on the ones that should be triaged.
+In a repository you own, open **Settings → Webhooks → Add webhook**. Set the payload URL to your public `https://…/webhooks/github` address, use `application/json`, configure a secret shared with the receiver, and subscribe only to **Issues**. Test by opening and editing an issue, then inspect the repository's webhook delivery history. The receiver must validate `X-Hub-Signature-256` against the raw request body before trusting the event.
 
-If the repositories belong to an organization and you are an owner, one organization webhook can cover all of them.
-
-### Version 1.0: Scope we are building
-
-```text
-one repository
-one repository webhook
-one public callback URL
-one issue event type
-```
-
-A GitHub App can wait. Installation tokens, permissions, and a second authentication model are separate from this pipeline. Once one repository can open an issue, schedule triage, classify it, store a summary, and show that result to the client, the execution model is in place. Covering more repositories is a later deployment choice.
+This version intentionally watches one repository. More repositories can later send to the same endpoint with separate repository webhooks; an organization webhook or GitHub App is a separate expansion. See [GitHub webhook types](https://docs.github.com/en/webhooks/types-of-webhooks).
