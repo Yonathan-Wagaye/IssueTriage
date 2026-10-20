@@ -123,3 +123,87 @@ The first milestone is not “exactly once.” It is: **no committed job silentl
 In a repository you own, open **Settings → Webhooks → Add webhook**. Set the payload URL to your public `https://…/webhooks/github` address, use `application/json`, configure a secret shared with the receiver, and subscribe only to **Issues**. Test by opening and editing an issue, then inspect the repository's webhook delivery history. The receiver must validate `X-Hub-Signature-256` against the raw request body before trusting the event.
 
 This version intentionally watches one repository. More repositories can later send to the same endpoint with separate repository webhooks; an organization webhook or GitHub App is a separate expansion. See [GitHub webhook types](https://docs.github.com/en/webhooks/types-of-webhooks).
+
+
+## Database Design
+
+### Parsed webhook data
+
+```
+{
+    "action": payload["action"],
+    "issue": {
+        "id": payload["issue"]["id"],
+        "title": payload["issue"]["title"],
+        "body": payload["issue"]["body"],
+        "number": payload["issue"]["number"],
+        "html_url": payload["issue"]["html_url"],
+        "state": payload["issue"]["state"],
+        "created_at": payload["issue"]["created_at"],
+        "updated_at": payload["issue"]["updated_at"],
+    },
+    "repository": {
+        "id": payload["repository"]["id"],
+        "name": payload["repository"]["name"],
+        "url": payload["repository"]["url"],
+    },
+}
+```
+### Relations
+* A webhook delivery with the same delivery_id means a redielivery
+* A repository can have mutiple issues
+* An issue can have mutiple webhook deliveries
+* A webhook delivery can have mutiple jobs 
+
+### Table Design
+```
+webhook_deliveries
+* id (Primary key)
+* github_delivery_id (similary deilvery id means a redelivery)
+* repositry_id (Foreign Key References repositories)
+* event_type (issue)
+* action (open, edit)
+* created_at 
+* updated_at
+```
+
+```
+repositories
+* id (Primary key) -> comes from github
+* name Text
+* url sting
+```
+
+```
+issues
+* delivery_id ( Primary key and Foreign Key  References webhook_deliveries)
+* issue_number
+* title
+* body 
+* state
+```
+
+```
+triage_jobs
+* id (Primary Key)
+* issue_id (Foreign Key Refrences issues)
+* status (pending, running, completed, failed, suspended)
+* attempt_count
+* owner_token
+* lease_expires_at
+* last_error
+* created_at
+```
+
+```
+triage_results
+* id (primary key)
+* job_id (Foreign Key Refrences tirage_jobs)
+* classification
+* summary
+* created_at
+```
+
+### Entity Relationship Diagrams
+
+![IssueTriage database schema](docs/database_schema.svg)
