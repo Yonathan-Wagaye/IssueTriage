@@ -2,7 +2,7 @@
 
 IssueTriage watches one GitHub repository and triages its issues. When an issue is opened or edited, the application saves the issue and a durable triage job. A background worker asks a small AI service to classify the issue and write a clearer summary. The client reads the latest saved result; it does not wait for AI during the webhook request.
 
-This is a learning project for webhooks, ASGI workers, async I/O, database transactions, and failure recovery. Version 1 deliberately uses one repository, one triage application process, SQLite, and five concurrent async worker tasks. It does not require Redis, SQS, or a separate worker HTTP API.
+Version 1 deliberately uses one repository, one triage application process, SQLite, and five concurrent async worker tasks. It does not require Redis, SQS, or a separate worker HTTP API.
 
 ## Architecture
 
