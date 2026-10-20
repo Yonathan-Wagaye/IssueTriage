@@ -207,3 +207,18 @@ triage_results
 ### Entity Relationship Diagrams
 
 ![IssueTriage database schema](docs/database_schema.svg)
+
+### Normal Rules Proof
+#### 1-NF
+* Each table has a primary key 
+* Row order does not encode an information
+* An attribute (column) does not contain mixed data types [check type definition]
+* No attribute (column) is not sotring a repeating group value; each attribute has atomic values
+#### 2-NF
+→ Primary keys: repositores.id, webhook_deliveries.id, issues.delivery_id, triage_jobs.id, and triage_results.id
+* Each column contain one primary key. Therefore, no ```non-key``` attribute can depend on only part of the primary key. [There is no partial dependence]
+#### 3-NF
+→ Primary keys: repositores.id, webhook_deliveries.id, issues.delivery_id, triage_jobs.id, and triage_results.id
+* repository_id in webhook_deliveries depends on the id and the repository_id because redilveries can happen and two tuples can share the same github_delivery_id. This violates 3NF. 
+
+
