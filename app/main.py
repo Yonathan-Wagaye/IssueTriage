@@ -25,6 +25,8 @@ async def webhook_github(request: Request):
     if not verify_github_webhook(github_secret, raw_body):
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
+    # Dump data to the database through one transaction model
+
     print(f"GitHub event: {event}, body bytes: {len(raw_body)}")
 
     parsed_payload = parse_github_webhook(raw_body)
