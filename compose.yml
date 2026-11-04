@@ -20,6 +20,8 @@ services:
       WATCHFILES_FORCE_POLLING: "true"
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPEN_AI_MODEL: ${OPEN_AI_MODEL}
+      WORKERS_COUNT: ${WORKERS_COUNT}
+      MAX_JOB_QUEUE_SIZE: ${MAX_JOB_QUEUE_SIZE}
       PYTHONPATH: /code
     volumes:
       - ./ai-service:/ai-service

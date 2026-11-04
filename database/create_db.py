@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS issues (
     CONSTRAINT fk_delivery_id FOREIGN KEY (delivery_id) REFERENCES webhook_deliveries(github_delivery_id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS tirage_jobs (
+CREATE TABLE IF NOT EXISTS triage_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id INTEGER NOT NULL,
     status TEXT NOT NULL CHECK(status='pending' OR status='running' OR status='completed' OR status='failed'),
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS triage_results (
     summary TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 
-    CONSTRAINT fk_job_id FOREIGN KEY (job_id) REFERENCES tirage_jobs(id) ON DELETE CASCADE
+    CONSTRAINT fk_job_id FOREIGN KEY (job_id) REFERENCES triage_jobs(id) ON DELETE CASCADE
 );
 """
 

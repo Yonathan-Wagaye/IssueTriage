@@ -1,25 +1,8 @@
-from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import AfterValidator, BaseModel, PlainSerializer
+from pydantic import BaseModel
 
-
-def _ensure_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        raise ValueError("datetime must include a timezone, e.g. a trailing 'Z'")
-    return value.astimezone(UTC)
-
-
-def _to_db_format(value: datetime) -> str:
-    # Matches SQLite's strftime('%Y-%m-%dT%H:%M:%fZ'), which has millisecond precision.
-    return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
-UTCDateTime = Annotated[
-    datetime,
-    AfterValidator(_ensure_utc),
-    PlainSerializer(_to_db_format, return_type=str),
-]
+from shared.schemas import UTCDateTime
 
 
 class RepositoryInput(BaseModel):

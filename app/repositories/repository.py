@@ -8,8 +8,8 @@ from app.models.models import (
     WebhookDeliveryInput,
 )
 from app.utils.utils import parse_issue_to_triage_job
-from database.create_db import DB_PATH
-from shared.schemas import IssueSummary
+from database.connection import connect
+from shared.schemas import IssueSummary, to_db_timestamp
 
 
 async def create_repository(
@@ -38,9 +38,9 @@ async def create_webhook_delivery(
             webhook_delivery.repository_id,
             webhook_delivery.event_type,
             webhook_delivery.action,
-            webhook_delivery.received_at,
-            webhook_delivery.github_created_at,
-            webhook_delivery.github_updated_at,
+            to_db_timestamp(webhook_delivery.received_at),
+            to_db_timestamp(webhook_delivery.github_created_at),
+            to_db_timestamp(webhook_delivery.github_updated_at),
         ),
     )
     return webhook_delivery
@@ -58,21 +58,20 @@ async def create_triage_job(
     db: aiosqlite.Connection, triage_job: TirageJobInput
 ) -> TirageJobInput:
     cursor = await db.execute(
-        "INSERT INTO tirage_jobs (issue_id, status, attempt_count, owner_token, lease_expires_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO triage_jobs (issue_id, status, attempt_count, owner_token, lease_expires_at) VALUES (?, ?, ?, ?, ?)",
         (
             triage_job.issue_id,
             triage_job.status,
             triage_job.attempt_count,
             triage_job.owner_token,
-            triage_job.lease_expires_at,
+            to_db_timestamp(triage_job.lease_expires_at),
         ),
     )
     return triage_job.model_copy(update={"id": cursor.lastrowid})
 
 
 async def queue_job_transaction(parsed: ParsedWebhook) -> TirageJobInput:
-    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
-        await db.execute("PRAGMA foreign_keys = ON")
+    async with connect() as db:
         await db.execute("BEGIN")
         try:
             await create_repository(db, parsed.repository)
