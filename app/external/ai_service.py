@@ -1,8 +1,9 @@
 import httpx
 from fastapi import HTTPException
-from schema import IssueInput, IssueSummary
 
-from app.repositories.repository import queue_job_transaction, save_issue_summary
+from app.models.models import ParsedWebhook
+from app.repositories.repository import queue_job_transaction, save_triage_result
+from shared.schemas import IssueSummary
 
 """
 Handles API calls to the AI service.
@@ -14,7 +15,7 @@ Components:
 
 
 async def call_ai_service(
-    issue: IssueInput, async_client: httpx.AsyncClient
+    issue: ParsedWebhook, async_client: httpx.AsyncClient
 ) -> IssueSummary:
     try:
         # single transaction save to DB
@@ -25,8 +26,8 @@ async def call_ai_service(
             json=issue.model_dump(),
         )
         issue_summary = IssueSummary.model_validate_json(response.json())
-        # save issue summary to DB
-        await save_issue_summary(issue_summary)
+        # save triage result to DB
+        await save_triage_result(issue_summary)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI service error: {e}")
     return {"message": "Issue summarized successfully"}

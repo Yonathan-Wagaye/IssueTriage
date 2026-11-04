@@ -3,7 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from openai import AsyncOpenAI, OpenAIError
-from schema import IssueInput, IssueSummary
+
+from shared.schemas import IssueContent, IssueSummary
 
 
 @asynccontextmanager
@@ -22,7 +23,7 @@ def read_root():
 
 
 @app.post("/openai/summarize")
-async def summarize_issue(issue: IssueInput, request: Request):
+async def summarize_issue(issue: IssueContent, request: Request):
     try:
         response = await request.app.state.openai_client.responses.parse(
             model=os.getenv("OPEN_AI_MODEL"),

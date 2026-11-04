@@ -9,6 +9,8 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
     volumes:
       - ./app:/code/app
+      - ./database:/code/database
+      - ./shared:/code/shared
 
   ai:
     build: ./ai-service
@@ -18,5 +20,8 @@ services:
       WATCHFILES_FORCE_POLLING: "true"
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPEN_AI_MODEL: ${OPEN_AI_MODEL}
+      PYTHONPATH: /code
     volumes:
       - ./ai-service:/ai-service
+      - ./database:/code/database
+      - ./shared:/code/shared

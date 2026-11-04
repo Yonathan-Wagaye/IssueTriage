@@ -1,7 +1,5 @@
 import aiosqlite
-from schema import IssueSummary
 
-from app.database.create_db import DB_PATH
 from app.models.models import (
     IssueInput,
     ParsedWebhook,
@@ -10,6 +8,8 @@ from app.models.models import (
     WebhookDeliveryInput,
 )
 from app.utils.utils import parse_issue_to_triage_job
+from database.create_db import DB_PATH
+from shared.schemas import IssueSummary
 
 
 async def create_repository(
@@ -87,16 +87,16 @@ async def queue_job_transaction(parsed: ParsedWebhook) -> TirageJobInput:
             raise
 
 
-async def save_issue_summary(
-    db: aiosqlite.Connection, issue_summary: IssueSummary
-) -> IssueSummary:
+async def save_triage_result(
+    db: aiosqlite.Connection, job_id: int, issue_summary: IssueSummary
+) -> int:
     cursor = await db.execute(
-        "INSERT INTO issue_summaries (issue_id, summary, category, priority) VALUES (?, ?, ?, ?)",
+        "INSERT INTO triage_results (job_id, classification, priority, summary) VALUES (?, ?, ?, ?)",
         (
-            issue_summary.issue_id,
-            issue_summary.summary,
+            job_id,
             issue_summary.category,
             issue_summary.priority,
+            issue_summary.summary,
         ),
     )
-    return issue_summary.model_copy(update={"id": cursor.lastrowid})
+    return cursor.lastrowid

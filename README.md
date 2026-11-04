@@ -85,7 +85,7 @@ This version intentionally watches one repository. More repositories can later s
 
 ### Table Design
 
-The schema is defined in `app/database/create_db.py`. Timestamps are stored as ISO-8601 UTC text, for example `2026-10-29T12:48:00.000Z`.
+The schema is defined in `database/create_db.py`, which is shared by the app and the AI service. Timestamps are stored as ISO-8601 UTC text, for example `2026-10-29T12:48:00.000Z`.
 
 #### `repositories`
 
