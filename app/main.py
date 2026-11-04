@@ -1,13 +1,17 @@
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 
-from app.repositories.repository import queue_job_transaction
+from app.external.ai_service import call_ai_service
 from app.utils.utils import parse_github_webhook, verify_github_webhook
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.ai_service_client = httpx.AsyncClient()
+    app.state.ai_service_client.base_url = os.getenv("AI_SERVICE_URL")
     yield
 
 
@@ -20,7 +24,7 @@ def read_root():
 
 
 @app.post("/webhooks/github")
-async def webhook_github(request: Request):
+async def webhook_github(request: Request, background_tasks: BackgroundTasks):
     event = request.headers.get("X-GitHub-Event")
     github_secret = request.headers.get("X-Hub-Signature-256")
     raw_body = await request.body()
@@ -35,9 +39,9 @@ async def webhook_github(request: Request):
     if parsed_payload is None:
         return {"message": "Webhook ignored"}
 
-    triage_job = await queue_job_transaction(parsed_payload)
+    # background task to call AI service
+    background_tasks.add_task(
+        call_ai_service, parsed_payload, app.state.ai_service_client
+    )
 
-    # Call the AI service to summarize the issue
-
-    print(f"Queued triage job {triage_job.id} for issue {triage_job.issue_id}")
-    return {"message": "Webhook received!", "triage_job_id": triage_job.id}
+    return {"message": "Webhook received and being processed!"}
