@@ -9,6 +9,7 @@ Pytest configuration file:
 import json
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from fastapi import Request
 
@@ -21,6 +22,7 @@ from app.models.models import (
 from database import connection, create_db
 
 
+# test database fixture
 @pytest.fixture
 async def db_file(tmp_path, monkeypatch):
     path = tmp_path / "test.db"
@@ -38,6 +40,7 @@ async def db_connection(db_file):
         yield conn
 
 
+# a fixture to test webhook parsing
 @pytest.fixture
 def webhook_request():
     payload = {
@@ -121,3 +124,29 @@ def parsed_webhook_request():
             state="open",
         ),
     )
+
+
+# fixtures for simualting an ai service
+@pytest.fixture
+def ai_request():
+    return []
+
+
+@pytest.fixture
+def ai_resposne():
+    return httpx.Response(
+        status_code=200,
+        json={"summary": "Login is broken.", "category": "bug", "priority": "high"},
+    )
+
+
+@pytest.fixture
+async def fake_ai_client(ai_request, ai_resposne):
+    def handle_request(request: httpx.Request):
+        ai_request.append(request)
+        return ai_resposne
+
+    async with httpx.AsyncClient(
+        transport=httpx.AsyncMock(handle_request), base_url="http://ai"
+    ) as client:
+        yield client

@@ -7,14 +7,14 @@ DB_PATH = Path(__file__).resolve().parent / "data" / "triageDB.db"
 
 schema = """
 CREATE TABLE IF NOT EXISTS repositories (
-    id string PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     url TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
-    github_delivery_id string PRIMARY KEY,
-    repository_id string NOT NULL,
+    github_delivery_id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL,
     event_type TEXT NOT NULL CHECK(event_type='issues'),
     action TEXT NOT NULL CHECK (action='opened' OR action='closed'),
     received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

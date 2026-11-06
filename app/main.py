@@ -31,8 +31,6 @@ async def webhook_github(request: Request, background_tasks: BackgroundTasks):
     if not verify_github_webhook(github_secret, raw_body):
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
-    print(f"GitHub event: {event}, body bytes: {len(raw_body)}")
-
     parsed_payload = parse_github_webhook(
         raw_body, event, request.headers.get("X-GitHub-Delivery")
     )
