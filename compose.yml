@@ -1,6 +1,8 @@
 services:
   triage-app:
-    build: ./app
+    build: 
+      context: ./app
+      target: dev
     ports:
       - "8000:8000"
     environment:
@@ -11,6 +13,8 @@ services:
       - ./app:/code/app
       - ./database:/code/database
       - ./shared:/code/shared
+      - ./tests:/code/tests
+      - ./pytest.ini:/code/pytest.ini
 
   ai:
     build: ./ai-service
@@ -27,3 +31,5 @@ services:
       - ./ai-service:/ai-service
       - ./database:/code/database
       - ./shared:/code/shared
+      - ./tests:/code/tests
+      - ./pytest.ini:/code/pytest.ini
